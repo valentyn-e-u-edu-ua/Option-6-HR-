@@ -1,0 +1,107 @@
+# Стенд практичної роботи «Захист БД PostgreSQL»
+#
+#   docker compose up -d --build            — основний сервер (db)
+#   docker compose --profile restore up -d  — «чистий» сервер для відновлення (етап 6)
+#   docker compose run --rm client ...      — клієнт psql / openssl (етап 4)
+#   docker compose run --rm app ...         — Python-застосунок для етапу 7
+#
+# УВАГА: порти публікуються ЛИШЕ на 127.0.0.1. Не змінюйте на "5432:5432" —
+# це відкриє вашу БД для всієї мережі (кафе, гуртожиток, Wi-Fi університету).
+
+name: pr-dbsec
+
+services:
+  db:
+    build: .
+    image: pr-dbsec/postgres:16
+    container_name: pr-db
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      # Пароль суперкористувача — з файла-секрету, а НЕ у змінній середовища
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_superuser_password
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    secrets:
+      - pg_superuser_password
+      - backup_passphrase
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./conf:/etc/postgresql/conf:ro          # postgresql.conf, pg_hba.conf
+      - ./certs:/certs-src:ro                   # TLS (етап 4)
+      - ../variants:/variants:ro                # схеми та дані варіантів
+      - ./work:/work                            # ВАШІ скрипти
+      - ./backups:/backups                      # бекапи (етап 6)
+    networks:
+      pr_net:
+        ipv4_address: 172.28.0.10
+    shm_size: 256mb
+
+  # «Чистий» інстанс для перевірки відновлення (етап 6)
+  restore:
+    profiles: ["restore"]
+    image: pr-dbsec/postgres:16
+    container_name: pr-db-restore
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD_FILE: /run/secrets/pg_superuser_password
+      POSTGRES_INITDB_ARGS: "--data-checksums"
+    secrets:
+      - pg_superuser_password
+      - backup_passphrase
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - pgdata_restore:/var/lib/postgresql/data
+      - ./conf:/etc/postgresql/conf:ro
+      - ./certs:/certs-src:ro
+      - ./work:/work:ro
+      - ./backups:/backups
+    networks:
+      pr_net:
+        ipv4_address: 172.28.0.11
+
+  # Клієнт: psql, openssl, gpg — однакові на Windows, macOS і Linux
+  client:
+    profiles: ["tools"]
+    image: pr-dbsec/postgres:16
+    entrypoint: []
+    command: ["bash"]
+    volumes:
+      - ./certs:/certs
+      - ./scripts:/scripts:ro
+      - ./work:/work
+    networks:
+      pr_net:
+        ipv4_address: 172.28.0.20
+
+  # Python-застосунок для етапу 7 (SQL-ін'єкції)
+  app:
+    profiles: ["tools"]
+    build: ./app
+    image: pr-dbsec/app:latest
+    working_dir: /app
+    volumes:
+      - ./app:/app
+      - ./certs:/certs:ro
+    networks:
+      pr_net:
+        ipv4_address: 172.28.0.30
+
+secrets:
+  pg_superuser_password:
+    file: ./secrets/pg_superuser_password.txt
+  backup_passphrase:
+    file: ./secrets/backup_passphrase.txt
+
+volumes:
+  pgdata:
+  pgdata_restore:
+
+networks:
+  pr_net:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24
+          gateway: 172.28.0.1

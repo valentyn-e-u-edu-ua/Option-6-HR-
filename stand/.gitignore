@@ -1,0 +1,8 @@
+# Секрети і ключі — ніколи не комітити
+secrets/*.txt
+certs/*.key
+certs/ca/
+work/enc_key.txt
+work/passwords*.sql
+backups/*
+!backups/.gitkeep
